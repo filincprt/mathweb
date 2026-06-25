@@ -1,9 +1,11 @@
 # Backend FastAPI для MathWeb: логика прогонов, аналитика, достижения и прямой запуск через Python
 from fastapi import FastAPI, HTTPException, Depends, Response, Header, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlmodel import Field, SQLModel, Session, create_engine, select
 from pydantic import BaseModel, validator
-from passlib.context import CryptContext
+import bcrypt
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
 from typing import Optional, List, Dict, Any
@@ -11,12 +13,13 @@ import os
 import json
 import random
 import uvicorn
+from pathlib import Path
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key')
 ALGORITHM = 'HS256'
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+BCRYPT_MAX_PASSWORD_BYTES = 72
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -52,7 +55,7 @@ engine = create_engine(DATABASE_URL, echo=False)
 app = FastAPI(title='MathWeb API')
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,12 +67,26 @@ def on_startup():
 
 # --- Утилиты ---
 
+def validate_password_bytes(password: str) -> str:
+    if len(password.encode('utf-8')) > BCRYPT_MAX_PASSWORD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Пароль не должен превышать 72 байта в UTF-8',
+        )
+    return password
+
+
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    validate_password_bytes(plain)
+    try:
+        return bcrypt.checkpw(plain.encode('utf-8'), hashed.encode('utf-8'))
+    except ValueError:
+        return False
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    validate_password_bytes(password)
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -163,6 +180,8 @@ class RegisterIn(BaseModel):
     def password_length(cls, value: str) -> str:
         if len(value) < 4:
             raise ValueError('Пароль должен содержать как минимум 4 символа')
+        if len(value.encode('utf-8')) > BCRYPT_MAX_PASSWORD_BYTES:
+            raise ValueError('Пароль не должен превышать 72 байта в UTF-8')
         return value
 
 class TokenOut(BaseModel):
@@ -172,6 +191,20 @@ class TokenOut(BaseModel):
 class LoginIn(BaseModel):
     nickname: str
     password: str
+
+    @validator('nickname')
+    def nickname_not_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('Никнейм не может быть пустым')
+        return value.strip()
+
+    @validator('password')
+    def password_length(cls, value: str) -> str:
+        if len(value) < 4:
+            raise ValueError('Пароль должен содержать как минимум 4 символа')
+        if len(value.encode('utf-8')) > BCRYPT_MAX_PASSWORD_BYTES:
+            raise ValueError('Пароль не должен превышать 72 байта в UTF-8')
+        return value
 
 class QuizSetup(BaseModel):
     operation: str = 'mix'
@@ -399,6 +432,31 @@ def create_custom_achievement(payload: AchievementIn, user: Optional[User] = Dep
         session.add(achievement)
         session.commit()
         return {"status": "created"}
+
+
+def configure_frontend_static() -> None:
+    """Serve a built Vite frontend when FRONTEND_DIST_DIR points to frontend/dist."""
+    dist_dir = Path(os.getenv('FRONTEND_DIST_DIR', Path(__file__).resolve().parents[1] / 'frontend' / 'dist'))
+    index_html = dist_dir / 'index.html'
+    assets_dir = dist_dir / 'assets'
+
+    if assets_dir.exists():
+        app.mount('/assets', StaticFiles(directory=str(assets_dir)), name='frontend-assets')
+
+    if index_html.exists():
+        @app.get('/', include_in_schema=False)
+        def frontend_index():
+            return FileResponse(index_html)
+
+        @app.get('/{path:path}', include_in_schema=False)
+        def frontend_spa(path: str):
+            requested = dist_dir / path
+            if requested.is_file():
+                return FileResponse(requested)
+            return FileResponse(index_html)
+
+
+configure_frontend_static()
 
 if __name__ == '__main__':
     uvicorn.run(app, host='127.0.0.1', port=8000, reload=False)
