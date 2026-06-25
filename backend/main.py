@@ -1,6 +1,8 @@
 # Backend FastAPI для MathWeb: логика прогонов, аналитика, достижения и прямой запуск через Python
 from fastapi import FastAPI, HTTPException, Depends, Response, Header, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlmodel import Field, SQLModel, Session, create_engine, select
 from pydantic import BaseModel, validator
 from passlib.context import CryptContext
@@ -11,6 +13,7 @@ import os
 import json
 import random
 import uvicorn
+from pathlib import Path
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key')
 ALGORITHM = 'HS256'
@@ -52,7 +55,7 @@ engine = create_engine(DATABASE_URL, echo=False)
 app = FastAPI(title='MathWeb API')
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -399,6 +402,31 @@ def create_custom_achievement(payload: AchievementIn, user: Optional[User] = Dep
         session.add(achievement)
         session.commit()
         return {"status": "created"}
+
+
+def configure_frontend_static() -> None:
+    """Serve a built Vite frontend when FRONTEND_DIST_DIR points to frontend/dist."""
+    dist_dir = Path(os.getenv('FRONTEND_DIST_DIR', Path(__file__).resolve().parents[1] / 'frontend' / 'dist'))
+    index_html = dist_dir / 'index.html'
+    assets_dir = dist_dir / 'assets'
+
+    if assets_dir.exists():
+        app.mount('/assets', StaticFiles(directory=str(assets_dir)), name='frontend-assets')
+
+    if index_html.exists():
+        @app.get('/', include_in_schema=False)
+        def frontend_index():
+            return FileResponse(index_html)
+
+        @app.get('/{path:path}', include_in_schema=False)
+        def frontend_spa(path: str):
+            requested = dist_dir / path
+            if requested.is_file():
+                return FileResponse(requested)
+            return FileResponse(index_html)
+
+
+configure_frontend_static()
 
 if __name__ == '__main__':
     uvicorn.run(app, host='127.0.0.1', port=8000, reload=False)
