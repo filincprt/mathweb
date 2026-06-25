@@ -46,7 +46,7 @@ python start.py --prod
 
 1. Остановите все старые процессы backend/frontend.
 2. Запустите проект именно через `python start.py` или `./start.sh` / `./start.ps1`: лаунчер проверит `backend/requirements.txt` и обновит `backend/.venv`, если зависимости изменились.
-3. Если в логах всё ещё есть `passlib`, удалите старое окружение `backend/.venv` и снова выполните `python start.py` — актуальный backend использует прямой `bcrypt`, а не `passlib`.
+3. Если в логах всё ещё есть `passlib`, удалите старое окружение `backend/.venv` и снова выполните `python start.py` — актуальный backend использует стандартный `hashlib.pbkdf2_hmac`, а не `passlib`/`bcrypt`.
 
 ## Что реализовано
 

@@ -66,6 +66,9 @@ def file_sha256(path: Path) -> str:
 def install_backend_dependencies() -> None:
     print_step("Устанавливаем зависимости backend")
     run_checked([str(PYTHON_EXE), "-m", "pip", "install", "--upgrade", "pip"], BACKEND)
+    # Старые версии проекта ставили passlib/bcrypt; удаляем их, чтобы stale .venv
+    # не мог снова попасть в проблемный passlib bcrypt backend при ручных запусках.
+    run_checked([str(PYTHON_EXE), "-m", "pip", "uninstall", "-y", "passlib", "bcrypt"], BACKEND)
     run_checked([str(PYTHON_EXE), "-m", "pip", "install", "-r", str(REQUIREMENTS)], BACKEND)
     REQUIREMENTS_MARKER.write_text(file_sha256(REQUIREMENTS), encoding="utf-8")
 

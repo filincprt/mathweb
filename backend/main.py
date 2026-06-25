@@ -5,7 +5,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Field, SQLModel, Session, create_engine, select
 from pydantic import BaseModel, validator
-import bcrypt
+import base64
+import hashlib
+import hmac
+import secrets
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
 from typing import Optional, List, Dict, Any
@@ -18,7 +21,8 @@ from pathlib import Path
 SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key')
 ALGORITHM = 'HS256'
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
-BCRYPT_MAX_PASSWORD_BYTES = 72
+PASSWORD_HASH_ITERATIONS = 260_000
+MAX_PASSWORD_LENGTH = 256
 
 
 class User(SQLModel, table=True):
@@ -67,26 +71,42 @@ def on_startup():
 
 # --- Утилиты ---
 
-def validate_password_bytes(password: str) -> str:
-    if len(password.encode('utf-8')) > BCRYPT_MAX_PASSWORD_BYTES:
+def validate_password(password: str) -> str:
+    if len(password) > MAX_PASSWORD_LENGTH:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail='Пароль не должен превышать 72 байта в UTF-8',
+            detail=f'Пароль не должен превышать {MAX_PASSWORD_LENGTH} символов',
         )
     return password
 
 
+def _pbkdf2(password: str, salt: bytes, iterations: int = PASSWORD_HASH_ITERATIONS) -> bytes:
+    return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, iterations)
+
+
 def verify_password(plain: str, hashed: str) -> bool:
-    validate_password_bytes(plain)
+    validate_password(plain)
     try:
-        return bcrypt.checkpw(plain.encode('utf-8'), hashed.encode('utf-8'))
-    except ValueError:
+        scheme, iterations_text, salt_text, digest_text = hashed.split('$', 3)
+        if scheme != 'pbkdf2_sha256':
+            return False
+        iterations = int(iterations_text)
+        salt = base64.urlsafe_b64decode(salt_text.encode('ascii'))
+        expected_digest = base64.urlsafe_b64decode(digest_text.encode('ascii'))
+    except (ValueError, TypeError):
         return False
+
+    actual_digest = _pbkdf2(plain, salt, iterations)
+    return hmac.compare_digest(actual_digest, expected_digest)
 
 
 def get_password_hash(password: str) -> str:
-    validate_password_bytes(password)
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    validate_password(password)
+    salt = secrets.token_bytes(16)
+    digest = _pbkdf2(password, salt)
+    salt_text = base64.urlsafe_b64encode(salt).decode('ascii')
+    digest_text = base64.urlsafe_b64encode(digest).decode('ascii')
+    return f'pbkdf2_sha256${PASSWORD_HASH_ITERATIONS}${salt_text}${digest_text}'
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -180,8 +200,8 @@ class RegisterIn(BaseModel):
     def password_length(cls, value: str) -> str:
         if len(value) < 4:
             raise ValueError('Пароль должен содержать как минимум 4 символа')
-        if len(value.encode('utf-8')) > BCRYPT_MAX_PASSWORD_BYTES:
-            raise ValueError('Пароль не должен превышать 72 байта в UTF-8')
+        if len(value) > MAX_PASSWORD_LENGTH:
+            raise ValueError(f'Пароль не должен превышать {MAX_PASSWORD_LENGTH} символов')
         return value
 
 class TokenOut(BaseModel):
@@ -202,8 +222,8 @@ class LoginIn(BaseModel):
     def password_length(cls, value: str) -> str:
         if len(value) < 4:
             raise ValueError('Пароль должен содержать как минимум 4 символа')
-        if len(value.encode('utf-8')) > BCRYPT_MAX_PASSWORD_BYTES:
-            raise ValueError('Пароль не должен превышать 72 байта в UTF-8')
+        if len(value) > MAX_PASSWORD_LENGTH:
+            raise ValueError(f'Пароль не должен превышать {MAX_PASSWORD_LENGTH} символов')
         return value
 
 class QuizSetup(BaseModel):
