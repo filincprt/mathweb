@@ -36,6 +36,8 @@ DEFAULT_FRONTEND_PORT = "5173"
 def print_step(message: str) -> None:
     print(f"\n==> {message}", flush=True)
 
+def print_step(message: str) -> None:
+    print(f"\n==> {message}", flush=True)
 
 def run_checked(cmd: Iterable[str], cwd: Path) -> None:
     subprocess.check_call(list(cmd), cwd=str(cwd))
