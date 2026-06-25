@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
@@ -20,6 +21,8 @@ ROOT = Path(__file__).resolve().parent
 BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
 VENV = BACKEND / ".venv"
+REQUIREMENTS = BACKEND / "requirements.txt"
+REQUIREMENTS_MARKER = VENV / ".requirements.sha256"
 
 IS_WINDOWS = sys.platform.startswith("win")
 PYTHON_EXE = VENV / "Scripts" / "python.exe" if IS_WINDOWS else VENV / "bin" / "python"
@@ -33,6 +36,8 @@ DEFAULT_FRONTEND_PORT = "5173"
 def print_step(message: str) -> None:
     print(f"\n==> {message}", flush=True)
 
+def print_step(message: str) -> None:
+    print(f"\n==> {message}", flush=True)
 
 def run_checked(cmd: Iterable[str], cwd: Path) -> None:
     subprocess.check_call(list(cmd), cwd=str(cwd))
@@ -50,16 +55,36 @@ def ensure_command(command: str, hint: str) -> None:
         raise RuntimeError(f"Команда '{command}' не найдена. {hint}")
 
 
-def ensure_venv() -> None:
-    if PYTHON_EXE.exists():
-        print("Виртуальное окружение backend уже существует.")
-        return
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    print_step("Создаём виртуальное окружение для backend")
-    run_checked([sys.executable, "-m", "venv", str(VENV)], ROOT)
+
+def install_backend_dependencies() -> None:
     print_step("Устанавливаем зависимости backend")
     run_checked([str(PYTHON_EXE), "-m", "pip", "install", "--upgrade", "pip"], BACKEND)
-    run_checked([str(PYTHON_EXE), "-m", "pip", "install", "-r", str(BACKEND / "requirements.txt")], BACKEND)
+    run_checked([str(PYTHON_EXE), "-m", "pip", "install", "-r", str(REQUIREMENTS)], BACKEND)
+    REQUIREMENTS_MARKER.write_text(file_sha256(REQUIREMENTS), encoding="utf-8")
+
+
+def ensure_venv() -> None:
+    current_requirements_hash = file_sha256(REQUIREMENTS)
+
+    if not PYTHON_EXE.exists():
+        print_step("Создаём виртуальное окружение для backend")
+        run_checked([sys.executable, "-m", "venv", str(VENV)], ROOT)
+        install_backend_dependencies()
+        return
+
+    installed_requirements_hash = REQUIREMENTS_MARKER.read_text(encoding="utf-8").strip() if REQUIREMENTS_MARKER.exists() else ""
+    if installed_requirements_hash != current_requirements_hash:
+        install_backend_dependencies()
+        return
+
+    print("Виртуальное окружение backend уже существует, зависимости актуальны.")
 
 
 def ensure_frontend_dependencies() -> None:
