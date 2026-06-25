@@ -1,7 +1,25 @@
-export const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '')
 
 export function getAuthToken(): string | null {
   return localStorage.getItem('access')
+}
+
+export async function parseApiError(res: Response, fallback = 'Ошибка запроса'): Promise<string> {
+  const data = await res.json().catch(() => null)
+  const detail = data?.detail
+
+  if (typeof detail === 'string') {
+    return detail
+  }
+
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => item?.msg || item?.message || JSON.stringify(item))
+      .filter(Boolean)
+      .join('; ') || fallback
+  }
+
+  return data?.message || fallback
 }
 
 export async function apiFetch(path: string, options: RequestInit = {}) {

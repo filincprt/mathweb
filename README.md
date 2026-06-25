@@ -42,6 +42,12 @@ python start.py --prod
 
 После сборки приложение будет доступно на `http://127.0.0.1:8000`. Если `frontend/dist` уже собран, можно ускорить запуск командой `python start.py --prod --skip-build`. Хосты и порты настраиваются флагами `--host`, `--port`, `--frontend-host`, `--frontend-port` или переменными окружения `MATHWEB_HOST`, `MATHWEB_PORT`, `MATHWEB_FRONTEND_HOST`, `MATHWEB_FRONTEND_PORT`.
 
+### Если регистрация показывает `Failed to fetch`
+
+1. Остановите все старые процессы backend/frontend.
+2. Запустите проект именно через `python start.py` или `./start.sh` / `./start.ps1`: лаунчер проверит `backend/requirements.txt` и обновит `backend/.venv`, если зависимости изменились.
+3. Если в логах всё ещё есть `passlib`, удалите старое окружение `backend/.venv` и снова выполните `python start.py` — актуальный backend использует прямой `bcrypt`, а не `passlib`.
+
 ## Что реализовано
 
 - FastAPI backend с SQLite
