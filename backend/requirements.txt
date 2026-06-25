@@ -1,7 +1,7 @@
 fastapi
 uvicorn[standard]
 python-jose[cryptography]
-passlib[bcrypt]
+bcrypt<5
 sqlmodel
 pydantic
 python-multipart
