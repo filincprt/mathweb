@@ -1,9 +1,14 @@
 # Backend FastAPI для MathWeb: логика прогонов, аналитика, достижения и прямой запуск через Python
 from fastapi import FastAPI, HTTPException, Depends, Response, Header, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlmodel import Field, SQLModel, Session, create_engine, select
 from pydantic import BaseModel, validator
-from passlib.context import CryptContext
+import base64
+import hashlib
+import hmac
+import secrets
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
 from typing import Optional, List, Dict, Any
@@ -11,12 +16,14 @@ import os
 import json
 import random
 import uvicorn
+from pathlib import Path
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key')
 ALGORITHM = 'HS256'
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+PASSWORD_HASH_ITERATIONS = 260_000
+MAX_PASSWORD_LENGTH = 256
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -52,7 +59,7 @@ engine = create_engine(DATABASE_URL, echo=False)
 app = FastAPI(title='MathWeb API')
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,12 +71,42 @@ def on_startup():
 
 # --- Утилиты ---
 
+def validate_password(password: str) -> str:
+    if len(password) > MAX_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f'Пароль не должен превышать {MAX_PASSWORD_LENGTH} символов',
+        )
+    return password
+
+
+def _pbkdf2(password: str, salt: bytes, iterations: int = PASSWORD_HASH_ITERATIONS) -> bytes:
+    return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, iterations)
+
+
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    validate_password(plain)
+    try:
+        scheme, iterations_text, salt_text, digest_text = hashed.split('$', 3)
+        if scheme != 'pbkdf2_sha256':
+            return False
+        iterations = int(iterations_text)
+        salt = base64.urlsafe_b64decode(salt_text.encode('ascii'))
+        expected_digest = base64.urlsafe_b64decode(digest_text.encode('ascii'))
+    except (ValueError, TypeError):
+        return False
+
+    actual_digest = _pbkdf2(plain, salt, iterations)
+    return hmac.compare_digest(actual_digest, expected_digest)
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    validate_password(password)
+    salt = secrets.token_bytes(16)
+    digest = _pbkdf2(password, salt)
+    salt_text = base64.urlsafe_b64encode(salt).decode('ascii')
+    digest_text = base64.urlsafe_b64encode(digest).decode('ascii')
+    return f'pbkdf2_sha256${PASSWORD_HASH_ITERATIONS}${salt_text}${digest_text}'
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -163,6 +200,8 @@ class RegisterIn(BaseModel):
     def password_length(cls, value: str) -> str:
         if len(value) < 4:
             raise ValueError('Пароль должен содержать как минимум 4 символа')
+        if len(value) > MAX_PASSWORD_LENGTH:
+            raise ValueError(f'Пароль не должен превышать {MAX_PASSWORD_LENGTH} символов')
         return value
 
 class TokenOut(BaseModel):
@@ -172,6 +211,20 @@ class TokenOut(BaseModel):
 class LoginIn(BaseModel):
     nickname: str
     password: str
+
+    @validator('nickname')
+    def nickname_not_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('Никнейм не может быть пустым')
+        return value.strip()
+
+    @validator('password')
+    def password_length(cls, value: str) -> str:
+        if len(value) < 4:
+            raise ValueError('Пароль должен содержать как минимум 4 символа')
+        if len(value) > MAX_PASSWORD_LENGTH:
+            raise ValueError(f'Пароль не должен превышать {MAX_PASSWORD_LENGTH} символов')
+        return value
 
 class QuizSetup(BaseModel):
     operation: str = 'mix'
@@ -399,6 +452,31 @@ def create_custom_achievement(payload: AchievementIn, user: Optional[User] = Dep
         session.add(achievement)
         session.commit()
         return {"status": "created"}
+
+
+def configure_frontend_static() -> None:
+    """Serve a built Vite frontend when FRONTEND_DIST_DIR points to frontend/dist."""
+    dist_dir = Path(os.getenv('FRONTEND_DIST_DIR', Path(__file__).resolve().parents[1] / 'frontend' / 'dist'))
+    index_html = dist_dir / 'index.html'
+    assets_dir = dist_dir / 'assets'
+
+    if assets_dir.exists():
+        app.mount('/assets', StaticFiles(directory=str(assets_dir)), name='frontend-assets')
+
+    if index_html.exists():
+        @app.get('/', include_in_schema=False)
+        def frontend_index():
+            return FileResponse(index_html)
+
+        @app.get('/{path:path}', include_in_schema=False)
+        def frontend_spa(path: str):
+            requested = dist_dir / path
+            if requested.is_file():
+                return FileResponse(requested)
+            return FileResponse(index_html)
+
+
+configure_frontend_static()
 
 if __name__ == '__main__':
     uvicorn.run(app, host='127.0.0.1', port=8000, reload=False)

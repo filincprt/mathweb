@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiFetch } from '../lib/api'
+import { apiFetch, parseApiError } from '../lib/api'
 
 export default function Login(){
   const [nick, setNick] = useState('')
@@ -12,14 +12,12 @@ export default function Login(){
   const submit = async () => {
     const url = mode === 'login' ? '/api/login' : '/api/register'
     try {
-      const res = await fetch((import.meta.env.VITE_API_BASE_URL||'') + url, {
+      const res = await apiFetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nickname: nick, password: pass })
       })
       if (!res.ok) {
-        const data = await res.json().catch(() => null)
-        throw new Error(data?.detail || 'Ошибка авторизации')
+        throw new Error(await parseApiError(res, 'Ошибка авторизации'))
       }
       const body = await res.json()
       localStorage.setItem('access', body.access_token)
